@@ -1,14 +1,15 @@
 import asyncio
 import json
+import re
 from logger import logging
 from bs4 import BeautifulSoup
-from database import create_job, get_job
+from database import create_job, get_job, update_job_status
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 URL_BASE = (
     "https://www.linkedin.com/jobs/search-results/"
-    "?keywords=RPA&f_TPR=r86400&f_AL=true"
+    "?keywords=FastAPI&f_TPR=r86400&f_AL=true"
     "&f_SAL=f_SA_id_225001%3A272001&start="
 )
 
@@ -115,6 +116,7 @@ async def process_job(
 
             logging.info(f"[{job_id}] Salvando vaga no banco")
 
+
             await create_job(
                 job_id=job_id,
                 company=title.split(" | ")[1],
@@ -124,6 +126,37 @@ async def process_job(
                 status="pending",
                 is_remote=True,
             )
+
+            candidacy = page.locator(
+                "button[aria-label='Usar a candidatura simplificada para esta vaga']"
+            )
+
+            if await candidacy.count():
+                await candidacy.first.click()
+                await page.wait_for_timeout(1000)
+            else:
+                logging.info(f"[{job_id}] Botão de candidatura simplificada não encontrado. Ignorando")
+                return
+
+            dialog = page.locator("dialog")
+
+            while await dialog.get_by_role("button", name="Avançar").count():
+                avancar = dialog.get_by_role("button", name="Avançar")
+
+                await avancar.first.click()
+                await page.wait_for_timeout(1500)
+
+            rate = dialog.get_by_role("button", name="Avaliar")
+            if await rate.count():
+                await rate.click()
+
+            if await dialog.get_by_text("Este campo é obrigatório", exact=True).count():
+                logging.info(f"[{job_id}] Campo obrigatório não preenchido. Ignorando")
+                return
+
+            await dialog.get_by_role("button", name="Enviar candidatura").click()
+
+            await update_job_status(job_id, "submitted")
 
             logging.info(f"[{job_id}] Vaga salva com sucesso")
 
@@ -182,7 +215,7 @@ async def run():
                 f"Processando {len(jobs_ids)} vagas com limite de 5 simultâneas"
             )
 
-            semaphore = asyncio.Semaphore(5)
+            semaphore = asyncio.Semaphore(1)
 
             tasks = [process_job(context, job_id, semaphore) for job_id in jobs_ids]
 
