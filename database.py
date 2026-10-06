@@ -36,6 +36,7 @@ async def create_job(
     job_title,
     description,
     location,
+    status="pending",
     is_remote=False,
 ):
     async with Session() as db:
@@ -45,7 +46,7 @@ async def create_job(
             company=company,
             job_title=job_title,
             description=description,
-            status="pending",
+            status=status,
             location=location,
             is_remote=is_remote,
         )

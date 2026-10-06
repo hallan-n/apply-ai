@@ -8,7 +8,8 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 URL_BASE = (
     "https://www.linkedin.com/jobs/search-results/"
-    "?keywords=python&f_TPR=r86400&f_WT=2&start="
+    "?keywords=RPA&f_TPR=r86400&f_AL=true"
+    "&f_SAL=f_SA_id_225001%3A272001&start="
 )
 
 
@@ -119,7 +120,8 @@ async def process_job(
                 company=title.split(" | ")[1],
                 job_title=title.split(" | ")[0],
                 description=description,
-                location="Teste",
+                location="Brazil",
+                status="pending",
                 is_remote=True,
             )
 
