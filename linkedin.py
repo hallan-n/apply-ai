@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from llm import ask_llm, prompt
 from logger import logging
 from bs4 import BeautifulSoup
 from database import create_job, get_job, update_job_status
@@ -9,7 +10,8 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 URL_BASE = (
     "https://www.linkedin.com/jobs/search-results/"
-    "?keywords=FastAPI&f_TPR=r86400&f_AL=true"
+    # "?keywords=FastAPI&f_TPR=r86400&f_AL=true" 24h
+    "?keywords=Python&f_TPR=r604800&f_AL=true" # 1semana
     "&f_SAL=f_SA_id_225001%3A272001&start="
 )
 
@@ -62,6 +64,57 @@ async def get_jobs_ids(page: Page) -> list[str]:
 
     return [(await job.get_attribute("componentkey")).split("-")[-1] for job in jobs]
 
+
+async def skip_modal(page: Page):
+    dialog = page.locator("dialog")
+
+    while True:
+        inputs = dialog.locator("input")
+
+        for i in range(await inputs.count()):
+            input = inputs.nth(i)
+            aria_label = await input.get_attribute("aria-label")
+
+            if not aria_label:
+                continue
+
+            aria_label = aria_label.lower()
+
+            if "current location" in aria_label:
+                await input.fill("Vitória, ES, Brazil")
+
+            elif "pretensão salarial" in aria_label:
+                await input.fill("9000" if "pj" in aria_label else "7000")
+
+            elif "expected salary" in aria_label:
+                await input.fill("9000" if "pj" in aria_label else "7000")
+
+        next_step = dialog.get_by_role("button", name="Avançar")
+
+        if await next_step.count() > 0:
+            await next_step.click()
+
+        await page.wait_for_timeout(500)
+
+        rate = dialog.get_by_role("button", name="Avaliar")
+
+        if await rate.count() > 0:
+            await rate.click()
+
+        await page.wait_for_timeout(500)
+
+        if await dialog.get_by_text("Este campo é obrigatório", exact=True).count():
+            logging.info("Campo obrigatório não preenchido. Ignorando")
+            return False
+        
+        if await dialog.get_by_text("Valor inválido", exact=True).count():
+            logging.info("Campo obrigatório não preenchido. Ignorando")
+            return False
+        
+        send = dialog.get_by_role("button", name="Enviar candidatura")
+
+        if await send.count() > 0:
+            return True
 
 async def process_job(
     context: BrowserContext,
@@ -138,21 +191,42 @@ async def process_job(
                 logging.info(f"[{job_id}] Botão de candidatura simplificada não encontrado. Ignorando")
                 return
 
-            dialog = page.locator("dialog")
 
-            while await dialog.get_by_role("button", name="Avançar").count():
-                avancar = dialog.get_by_role("button", name="Avançar")
 
-                await avancar.first.click()
-                await page.wait_for_timeout(1500)
 
-            rate = dialog.get_by_role("button", name="Avaliar")
-            if await rate.count():
-                await rate.click()
 
-            if await dialog.get_by_text("Este campo é obrigatório", exact=True).count():
-                logging.info(f"[{job_id}] Campo obrigatório não preenchido. Ignorando")
+            can_continue = await skip_modal(page)
+
+            if not can_continue:
+                logging.info(f"[{job_id}] Modal de candidatura não pode ser continuado. Ignorando")
                 return
+
+
+
+
+
+
+
+ 
+
+            response = ask_llm("gpt-5-mini",
+                    prompt.format(
+                        title=title.split(" | ")[0],
+                        description=description
+                    )
+                )
+
+            if response == "NÃO APLICAR":
+                logging.info(f"[{job_id}] Candidato não atende aos requisitos. Ignorando")
+                return
+
+            if response == "AVALIAR":
+                logging.info(f"[{job_id}] Candidato atende parcialmente aos requisitos. Avaliando manualmente")
+                await update_job_status(job_id, "evaluate")
+                return
+
+            
+            dialog = page.locator("dialog")
 
             await dialog.get_by_role("button", name="Enviar candidatura").click()
 
@@ -227,6 +301,6 @@ async def run():
 
             logging.info(f"Avançando para start={step}")
 
-            await browser.close()
+        await browser.close()
 
     logging.info("Scraper finalizado")
