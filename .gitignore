@@ -1,2 +1,4 @@
 /env
 cookies.json
+*.db
+__pycache__
